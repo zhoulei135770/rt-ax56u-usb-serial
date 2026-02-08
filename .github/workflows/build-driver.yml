@@ -1,0 +1,65 @@
+name: Build RT-AX56U USB Serial Driver
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    steps:
+      # 1. 安装基础依赖
+      - name: Install Dependencies
+        run: |
+          sudo apt update && sudo apt install -y git build-essential libtool-bin ncurses-dev unzip libssl-dev rsync
+
+      # 2. 克隆梅林源码（含 RT-AX56U 完整配置）
+      - name: Clone Merlin Source
+        run: |
+          git clone --depth 1 https://github.com/RMerl/asuswrt-merlin.ng.git
+          cd asuswrt-merlin.ng/release/src-rt-5.02axhnd.675x
+
+      # 3. 克隆官方工具链
+      - name: Clone Toolchains
+        run: |
+          cd asuswrt-merlin.ng/release/src-rt-5.02axhnd.675x
+          git clone --depth 1 https://github.com/RMerl/am-toolchains.git
+
+      # 4. 配置工具链环境
+      - name: Configure Toolchain
+        run: |
+          cd asuswrt-merlin.ng/release/src-rt-5.02axhnd.675x/am-toolchains/brcm-arm-hnd
+          export TOOLCHAIN_PATH=$(pwd)/crosstools-arm-gcc-5.3-linux-4.1-glibc-2.22-binutils-2.25/usr/bin
+          export PATH=$PATH:$TOOLCHAIN_PATH
+          export CROSS_COMPILE=arm-buildroot-linux-gnueabi-
+
+          # 进入内核目录，配置驱动编译
+          cd ../../../../kernel/linux-4.1
+          # 写入最小配置（适配 RT-AX56U）
+          cat > .config << EOF
+          CONFIG_ARM=y
+          CONFIG_ARM_V7=y
+          CONFIG_ARCH_CORTEX_A9=y
+          CONFIG_USB=y
+          CONFIG_USB_SERIAL=y
+          CONFIG_USB_SERIAL_PL2303=m
+          CONFIG_USB_SERIAL_CH341=m
+          CONFIG_MODULES=y
+          CONFIG_BCM6755=y
+          CONFIG_BCMARM=y
+          EOF
+
+          # 预处理 + 编译驱动
+          make ARCH=arm CROSS_COMPILE=$CROSS_COMPILE oldconfig prepare -j$(nproc)
+          make ARCH=arm CROSS_COMPILE=$CROSS_COMPILE modules SUBDIRS=drivers/usb/serial/ -j$(nproc)
+
+      # 5. 提取编译好的驱动
+      - name: Extract Driver
+        run: |
+          mkdir -p output
+          cp asuswrt-merlin.ng/release/src-rt-5.02axhnd.675x/kernel/linux-4.1/drivers/usb/serial/pl2303.ko output/
+          cp asuswrt-merlin.ng/release/src-rt-5.02axhnd.675x/kernel/linux-4.1/drivers/usb/serial/ch341.ko output/
+
+      # 6. 上传驱动为 Artifact（可下载）
+      - name: Upload Driver
+        uses: actions/upload-artifact@v4
+        with:
+          name: rt-ax56u-usb-serial-driver
+          path: output/
